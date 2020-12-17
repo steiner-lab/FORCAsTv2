@@ -1,0 +1,694 @@
+c####################################################################
+c This contains the subroutines to calculate the sources and sinks
+c of all species, i.e. emissions, deposition and advection.
+c####################################################################
+c Emissions-currently only biogenic emissions are calculated on-line
+c Subroutine sourcest added by Renate Forkel, IMK-IFU
+c#################################################################
+      subroutine sourcest(vcp,lprin,deltim,tstamp)
+c BVOC emission routine uses G95 algorithms but includes both 
+c pool and synthesis emissions
+c#################################################################
+c Monoterpenes are considered separately but are all then put into 
+c groups according to chemistry scheme lumping (currently APIN, BPIN,
+c DLMN, oMT for CACM and TERP=API for RACM)
+c Sesquiterpenes assumed temperature only dependence (as per MTs)
+c MBO assumed light and temperature dependent (as per ISOP)
+c
+      USE cacm3_Parameters
+      USE module_interf       
+      USE cacm3_Precision, ONLY:dp 
+      implicit none
+!      INTEGER             NLEV
+!      INTEGER             NSPEC, ndspec	!ka - added deposition of meoh and etoh; added ndspec
+!      INTEGER             NRECT
+      INTEGER             MAXRECT
+      DOUBLE PRECISION    DELTIM,      TSTAMP,      VCP
+      INTEGER             ISORTIN
+      DOUBLE PRECISION    ALAM,        AVDFG,       DRNET       
+      DOUBLE PRECISION    FT,          FTS
+      DOUBLE PRECISION    FU,          GAMMAL
+      DOUBLE PRECISION    GAMMALS,     GAMMAT
+      DOUBLE PRECISION    GAMMATP,     GAMMATS,     GAMMT
+      DOUBLE PRECISION    RNETA,    SOVOC,       SUMDFG
+      INTEGER             I,           ISORT,       J,           JSPEC
+      INTEGER             K,           LS,          II
+      DOUBLE PRECISION    P,           RELH,        RHOAIR
+      DOUBLE PRECISION    T,           THETA
+      DOUBLE PRECISION    HCPY,        HTR,         SIZELF,      TLAI
+      DOUBLE PRECISION    ZROUGH
+      INTEGER             LEVCPY,      LEVHTR
+      DOUBLE PRECISION    EVAPS,       HEATS
+      DOUBLE PRECISION    ADVEC,                    ADVEMS
+      DOUBLE PRECISION    BVOC,        BVOCEMS,     BEMIS
+      DOUBLE PRECISION    SOVOCE      
+      DOUBLE PRECISION    FAPI,        FAPI2,       FISO,        FISO2
+      DOUBLE PRECISION    FLIM,        FLIM2,       FMACR,       FMACR2
+      DOUBLE PRECISION    SUMSAPI,     SUMSISO,     SUMSLIM
+c      DOUBLE PRECISION    DZ,          DZF,         Z
+c      DOUBLE PRECISION    ZF
+      REAL(KIND=dp)    :: Z, ZF, DZ, DZF
+      DOUBLE PRECISION    CLAI,        CT,          DF
+      DOUBLE PRECISION    DISTLS,      FR,          TOTLAI
+      INTEGER             ITOT,        ITOTP1,      JTOT
+      DOUBLE PRECISION    DEPN,                     DEPR
+      DOUBLE PRECISION    DEPRAT,                   SOURCE
+      DOUBLE PRECISION    DSTNET,                   DSTRAD
+      DOUBLE PRECISION    FRAREA,                   TEMPLF
+      DOUBLE PRECISION    TSOIL
+      DOUBLE PRECISION    BMFLX,       D,           RNDIV
+      DOUBLE PRECISION    RNET,        RNLAM,       TSFC,        U
+
+!      parameter (nlev=40)    ! number of levels  
+!      parameter (nspec=84, ndspec=86, nrect=249)!ka - added deposition of meoh and etoh; added ndspec
+      parameter(maxrect=500)
+
+      logical lprin
+
+      common/height/z(nlev),zf(nlev),dz(nlev),dzf(nlev)
+      common/atmo1/ t(nlev),theta(nlev),p(nlev),rhoair(nlev)
+     & ,relh(nlev)
+      common /cpy/ hcpy,htr,tlai,levcpy,levhtr,zrough,sizelf
+      common /rad2/dstrad(3,10,99),dstnet(10,99),frarea(10,99)
+     &,templf(10,99),tsoil
+      common/rad4/d(3,99),u(3,99),bmflx(3,99),rnet(99),rndiv(99),
+     &tsfc,rnlam(3,99)
+      common/misc2/fr(99),ct(99),totlai,df(99)
+     &,clai(99),distls(10),itot,itotp1,jtot
+!ka - added stomatal control factor to storage emissions
+      common/resis1/rhleaf(99),rsleaf(10,99),rsnovp(10,99),
+     & rst(10,99),hpsi
+      double precision rhleaf,rsleaf,rsnovp,rst,hpsi
+!ka - added stomatal control; end of added section
+!ka - added beta (bexp array)
+      common/efact/ EFno,EFsyn(14),EFpl(14),sovoce(9),bvoc(nlev,14),
+     & bemis(nlev,13),bvocems(14),advec(nlev,10),advems(10),bexp(13)
+      double precision EFno,EFsyn,EFpl,bexp
+!ka - added beta; end of added section
+      common/etc/fiso,fapi,flim,fmacr,sumsiso,sumsapi,sumslim,fapi2
+     &,fiso2,flim2,fmacr2
+      data rneta/99999./,drnet/0.0/
+
+      dimension vcp(nlev,nspec)
+      dimension gammat(10,99),gammats(99)
+      dimension gammal(10,99),gammals(99)
+      dimension gammt(13,10,99),gammatp(13,99)
+
+c                  HC3  HC5  OLT  OLI  HCHO  ALD  KET  ORA1 ORA2
+       data sovoce/0.08,0.05,0.06,0.31,0.11, 0.16,0.06,0.10,0.07/ 
+c Split to RACM species follows Grell et al, 2000 (converted to moles)  
+
+      common/quellen/source(nlev,nspec),depn(nlev,nspec),
+     & deprat(nlev,nspec),depr(nspec) !ka - added deposition of meoh and etoh; altered nspec to ndspec
+      common/cpysrc/ evaps(99),heats(99)
+
+      double precision gammct, gammcl, gammtf
+
+       do k=1,nlev
+        do jspec=1,nspec
+         source(k,jspec)=0.
+        enddo
+        do ii=1,13
+         bemis(k,ii)=0.
+         bvoc(k,ii)=0.
+        enddo
+         bvoc(k,14)=0.
+       enddo
+c
+c  water vapor from leaf energy balance 
+c 
+      do k=2,nlev-1
+       alam=(597.-0.57*(t(k)-273.15))*4.18e03
+       source(k,lh2o)=0.5*(evaps(k)+evaps(k-1))/alam/dz(k) 
+       source(k,lh2o)=source(k,lh2o)/rhoair(k)/0.622 
+      enddo
+c      
+c Emission factors for Isoprene and Monoterpene ef***(ii)
+c where ii=1: Pool, ii=2: Synthesis term
+c VOCs in EFsyn and EFpl are:
+c iso,api,bpi,dlim,omt (lumped "other" MT),bcar,afar,osqt (lumped 
+c "other" SQT), meoh,acetaldehyde,acetone,mvk-mcr,mbo,oVOC
+c Numbers are in nmol per m**2 proj. leaf area per sec
+c  
+c Split of terpenes for RACM according to W.Seidl (priv. comm.)
+c API represents a-Pinene, b-Pinen, 3-Carene, Sabinene
+c LIM represents d-limonene, a-Terpinene, b-Terpinene, a-Phellandrene, b-Phellandrene
+c 
+       avdfg=0.
+
+      do j=2,jtot      ! loop over the crown space layers
+       gammats(j)=0.
+       gammals(j)=0.
+       do ii=1,13
+        gammatp(ii,j)=0.
+       enddo
+
+        do i=1,itotp1  ! loop over the angle classes (sunlit) and shaded fraction
+c Synthesis emission factor C_T (temperature)
+          gammat(i,j)=gammct(templf(i,j))  !templf refers to layers
+c Synthesis emission factor C_L (light)
+          gammal(i,j)=gammcl(dstrad(1,i,j))
+!ka - added beta
+c Pool emission  factor (temperature)
+          do ii=1,13
+            gammt(ii,i,j)=gammtf(bexp(ii),templf(i,j))
+          enddo
+!ka - added beta; end of added section
+!ka - added stomatal control factor to pool emissions for methanol, acetone and acetaldehyde
+c!ka       do ii=5,7
+c!ka          if ((rst(i,j).lt.3000.).and.(rst(i,j).gt.0.0)) then
+c!ka            gammt(ii,i,j)=(gammt(ii,i,j)*3000.0/rst(i,j))/3.
+c!ka          endif
+c!ka       enddo
+!ka - added stomatal control; end of added block
+c Sum the emission factor over all angle classes, weighted by fractional leaf area
+          gammats(j)= gammats(j)+gammat(i,j)*frarea(i,j)
+          gammals(j)= gammals(j)+gammal(i,j)*frarea(i,j)
+          do ii=1,13
+            gammatp(ii,j)= gammatp(ii,j)+gammt(ii,i,j)*frarea(i,j)
+          enddo
+        enddo  ! end loop over angle classes
+c
+c Using single array for lumped/individual species: 
+c 1=iso, 2=apin (=api+omt), 3=bpin, 4=dlim, 5=meoh, 6=ald (acetaldehyde), 
+c 7=ket (acetone), 8=mvk-mcr, 9=mbo, 10=bcar, 11=afar, 12=osqt, 
+c 11=oVOC, 12=soil no
+c emission factor per m**3 converted to m**2 projected leaf area/m**2 ground  
+c df refers to layers (index starts at 1) 
+c emissions mapped from canopy layers to full model domain layers  
+c         
+        bemis(levhtr-2+j,1)=(EFpl(1)*gammatp(1,j) +
+     &            EFsyn(1)*gammats(j)*gammals(j))*df(j-1) 
+        bemis(levhtr-2+j,2)=((EFpl(2)+EFpl(5))*gammatp(2,j) +
+     &            (EFsyn(2)+EFsyn(5))*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,3)=(EFpl(3)*gammatp(3,j) +
+     &            EFsyn(3)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,4)=(EFpl(4)*gammatp(4,j) +
+     &            EFpl(4)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,5)=(EFpl(9)*gammatp(5,j) +
+     &            EFsyn(9)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,6)=(EFpl(10)*gammatp(6,j) +
+     &            EFsyn(10)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,7)=(EFpl(11)*gammatp(7,j) +
+     &            EFsyn(11)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,8)=(EFpl(12)*gammatp(8,j) +
+     &            EFsyn(12)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,9)=(EFpl(13)*gammatp(9,j) +
+     &            EFsyn(13)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,10)=(EFpl(6)*gammatp(10,j) +
+     &            EFsyn(6)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,11)=(EFpl(7)*gammatp(11,j) +
+     &            EFsyn(7)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,12)=(EFpl(8)*gammatp(12,j) +
+     &            EFsyn(8)*gammats(j)*gammals(j))*df(j-1)
+        bemis(levhtr-2+j,13)=(EFpl(14)*gammatp(13,j) +
+     &            EFsyn(14)*gammats(j)*gammals(j))*df(j-1)
+
+        if(lprin) then
+c        if(gammals(j).gt.1000.) then
+         sumdfg=gammals(j)*df(j-1)
+c        endif
+        endif
+
+      enddo ! end loop over crown space layers
+c
+c  Emission factor per m**3            
+c  potential isoprene emission in m 
+c         
+      sumsiso=0.
+      sumsapi=0.
+      sumslim=0.
+
+      do k=2,nlev   !loop over model levels
+c ########################################################
+c Put emissions into an array ready to be passed to the 
+c CACM chemistry scheme
+c ########################################################
+       do ii=1,13
+        bvoc(k,ii)=0.5*(bemis(k,ii)+bemis(k-1,ii))/(0.5*(dz(k)+dz(k-1)))
+       enddo
+c ########################################################
+c Put emissions into an array ready to be passed to the 
+c RACM chemistry scheme
+c ########################################################
+!       ls=36   !ISO
+       source(k,lisop)=bvoc(k,1)
+       sumsiso=sumsiso+source(k,lisop)*0.5*(dz(k)+dz(k-1))  
+!       ls=6    !API
+       source(k,lapin)=bvoc(k,2)
+       source(k,lbpin)=bvoc(k,3) 
+       sumsapi=sumsapi+source(k,lapin)*0.5*(dz(k)+dz(k-1))  
+!       ls=40   !LIM
+       source(k,ldlmn)=bvoc(k,4)
+       sumslim=sumslim+source(k,ldlmn)*0.5*(dz(k)+dz(k-1))  
+!added by ddw
+       source(k,lmeoh)=bvoc(k,5)
+       source(k,lald1)=bvoc(k,6)
+       source(k,lketl)=bvoc(k,7)
+       source(k,lmvk) =bvoc(k,8)*0.5
+       source(k,lmacr) =bvoc(k,8)*0.5
+       source(k,lmbo) =bvoc(k,9)
+       source(k,lbcar) =bvoc(k,10)
+       source(k,lafar) =bvoc(k,11)
+       source(k,losqt) =bvoc(k,12)
+c Split of OVOC    
+c       ls=23   !HC3
+!        source(k,lhc3)=sovoce(1)*bvoc(k,13)
+       ls=25   !HC5
+!        source(k,lhc5)=sovoce(2)*bvoc(k,13)
+       ls=58   !OLT
+!        source(k,lolt)=sovoce(3)*bvoc(k,13)
+       ls=54   !OLI
+!        source(k,loli)=sovoce(4)*bvoc(k,13)
+c       source(k,ls)= 0.0
+       ls=29   !HCHO
+!        source(k,lhcho)=sovoce(5)*bvoc(k,13)
+       ls=5    !ALD
+!        source(k,lald)=bvoc(k,6)
+       ls=38   !KET
+!        source(k,lketl)=bvoc(k,7) 
+       ls=63   !ORA1
+!        source(k,lora1)=sovoce(8)*bvoc(k,13)
+       ls=64   !ORA2
+!        source(k,lora2)=sovoce(9)*bvoc(k,13)
+      enddo
+c
+c  NO source at surface  ! ###########  Adapt, if necessary
+      ft=exp(0.071*(t(1)-273.15))
+c      source(1,lno)=0.125e-12/dzf(1)*ft  !org.
+c use low soil NO for Oak Ridge
+      fu=1./40.9*1.e-9
+c     source(1,lno)= 0.0125e-12/dzf(1)*ft
+c     source(1,lno)= fu*0.07/14./dzf(1)*ft 
+
+c use measured NO emission rate of 180 nmol m-2 hr-1 for UMBS
+c (Alaghmand et al., 2011), corresponding to 0.05 m-2 s-1
+!cxc      source(1,lno)= 0.325e-12/dzf(1)*ft 
+      source(1,lno)= (EFno/0.05)*0.325e-12/dzf(1)*ft !ka - replaced above line with soil NO emission rate read in from inputn
+      bvoc(1,14)=source(1,lno) 
+      if(rneta.lt.99998.) then
+      drnet=(rnet(1)-rneta)/deltim*3600. !drnet/dt in W/m**2 /h
+      if(drnet.lt.0.) drnet=0.
+      endif
+
+      rneta=rnet(1)
+
+      return
+      end
+
+
+      double precision function gammct(tlc)
+c Isoprene emission, factor C_T (temperature)
+      implicit none
+      DOUBLE PRECISION    TLC
+      DOUBLE PRECISION    CT2,         CTL,         R,           TL
+      DOUBLE PRECISION    TM,          TS,          XN,          Z
+
+      ts=303.
+      tm=314.
+      r=8.314
+      ctl=95000.
+      ct2=230000. !Guenther et al., 1995 (JGR 100, 8878)
+ 
+      tl=tlc+273.15
+      z=exp( (ctl*(tl-ts)) / (r*ts*tl) )
+      xn=0.926+exp( (ct2*(tl-tm)) / (r*ts*tl) )
+      gammct=z/xn
+c 
+      return
+      end
+ 
+
+      double precision function gammcl(par)
+c Isoprene emission, factor C_L (light)
+      implicit none
+      DOUBLE PRECISION    PAR
+      DOUBLE PRECISION    ALPHA,       CLL,         PARE,        XN
+      DOUBLE PRECISION    Z
+
+      cll=1.066 
+      alpha=0.0027  !Guenther et al., 1995 (JGR 100, 8878)
+ 
+      if(par.gt.1.e-8) then
+      pare=par*4.6    
+      z=alpha*cll*pare
+      xn=sqrt(1.+alpha*alpha*pare*pare)
+      gammcl=z/xn
+      else
+      gammcl=0.
+      endif
+c 
+      return
+      end
+ 
+ 
+      double precision function gammtf(bfct,tlc)	!ka - added beta; beta (bexp) now read from inputn
+c Terpene and OVOC correction factor (temperature)
+      implicit none
+      DOUBLE PRECISION    TLC
+      DOUBLE PRECISION    TL,          TS, bfct		!ka - added beta; passed through as bfct
+
+      ts=297.	!Gunther et al 2012
+      tl=tlc+273.15
+      gammtf=exp(bfct*(tl-ts))				!ka - added beta (bfct)
+c 
+      return
+      end
+
+
+c ##############################################################
+c Advection
+c Modify this section to incorporate advection of energy (heat)
+c and mass (concentrations). For most sites this will be wind 
+c direction dependent, and will predominantly consist of key
+c anthropogenic pollutants (NOx, CO, SO2, O3, VOCs)
+c ##############################################################
+
+      subroutine advect(l30,itime,vg,vcp,tstamp)
+
+      USE cacm3_Parameters
+      USE module_interf       
+      implicit none
+!      INTEGER             NLEV
+      DOUBLE PRECISION    TIMIN
+      INTEGER             J
+      DOUBLE PRECISION    ADVEC,                    ADVEMS
+      DOUBLE PRECISION    BVOC,        BVOCEMS,     BEMIS
+      DOUBLE PRECISION    SOVOCE
+      DOUBLE PRECISION    EXTF,        FACTE
+      INTEGER             ICUMDY,      IYEAR,       JDAY,        MONTH
+!      INTEGER             NSPEC
+
+!      parameter (nlev=40,nspec=84)    ! number of levels,species 
+      integer itime
+      logical l30
+      dimension vcp(nlev,nspec)
+      double precision vg,tstamp,vcp
+
+      real timloc,deltim
+      common/timpar/timloc,deltim,month,jday,iyear,icumdy
+      double precision potvis
+      common /rad7/ facte(99),extf(99),potvis
+
+      common/efact/ EFno,EFsyn(14),EFpl(14),sovoce(9),bvoc(nlev,14),
+     & bemis(nlev,13),bvocems(14),advec(nlev,10),advems(10),bexp(13)
+      double precision EFno,EFsyn,EFpl,bexp
+
+      integer k
+      double precision vdir,vdir0,tcfct
+      save vdir0
+c
+c ##############################################################
+c Advection rate calculations use average concentrations 
+c observed at specific site for distinct air mass back 
+c trajectories. The conditions here are set for UMBS - taken 
+c from observations during CABINEX (2009) and emissions 
+c inventories for nearby cities. They are wind-direction 
+c dependent; the wind direction at the top of the canopy 
+c is read in every 30 mins from input file fort.5044
+c ############################################################## 
+c Test simulations for unpolluted conditions => set advection 
+c to zero; then experiment with -ve advection (ie to reduce
+c concentrations from initial (average) conditions
+c ##############################################################
+c
+c Set up and initialise the array to pass advection rates to the 
+c chemistry scheme: advec(k,j) where k is the model level and j
+c the species. The value of j is currently set to 10; the species
+c to be advected are NO2, NO, NO3, O3, CO, SO2, bVOC, aVOC and 
+c two currently unused elements.
+c 
+      do k=1,nlev
+       do j=1,10
+        advec(k,j)=0.
+       enddo
+      enddo
+c Units converted from ppb/hr to ppb/sec and then to vmr/s
+c       tcfct=1.0E-09*deltim/3600.	! Conversion factor (per timestep)
+      tcfct=1.0E-09/3600.		! Conversion factor (per s)
+      if (itime .eq. 1) vdir = 300.  	! In case of error on first read
+      if (l30) read (5044, *) timin, vdir0
+      if (vdir0 .ne. -999.) vdir = vdir0
+c
+c Use HYSPLIT to check which heights are affected by advection
+      do k=22,26
+
+c NO2 advection rates
+!testka       if((vdir.gt.180.).and.(vdir.lt.255.)) advec(k,1) = vg*4.25*tcfct	!daytime NOx of 5.0ppb (SW; ultrahi-NOx) 
+!testka       if((vdir.gt.180.).and.(vdir.lt.255.)) advec(k,1) = vg*1.9*tcfct	!daytime NOx of 2.0ppb (SW; hi-NOx) 
+!testka       if((vdir.le.45.).or.(vdir.ge.255.)) advec(k,1) = vg*0.4*tcfct	!daytime NOx of 0.35ppb (N-NW; lo-NOx) 
+c Use non-direction dependent advection for AVE day
+!testka      advec(k,1) = vg*1.0*tcfct	!testka - average day (1ppbv)
+!testka      advec(k,1) = vg*0.4*tcfct	!testka - average day, lo-NOx (0.35ppbv)
+!testka      advec(k,1) = vg*4.25*tcfct	!testka - average day, hi-NOx (5ppbv)
+!testka      advec(k,1) = vg*1.9*tcfct	!testka - average day, hi-NOx, test 2ppbv
+c 
+c Advection rates for UMBS
+      if((vdir.gt. 90.).and.(vdir.lt.270.)) advec(k,1) = vg*0.05*tcfct
+      if((vdir.gt.135.).and.(vdir.lt.225.)) advec(k,1) = vg*0.25*tcfct
+!hi-nox test      advec(k,1) = vg*0.25*tcfct	!ka - for testing -> hi-nox
+c 
+c
+c NO3 advection rates - assumed time but not wind-direction 
+c dependent (night-time advection)
+c 
+!cxc       if(timeloc.lt.6.or.timeloc.gt.22) then    ! nightime criterion for no3
+!cxc         advec(k,3)= 35.*exp(-vg)*tcfct
+!cxc       end if
+c       dno3dt = vg*15.0*tcfct/potvis
+c
+c O3 advection rates
+c 
+!cxc        advec(k,4)  = vg*0.5*tcfct
+!cxc       if(vdir.lt.200.) advec(k,3) = vg*40.0*tcfct
+!cxc       if((vdir.gt.135.).and.(vdir.lt.225.)) advec(k,3) = vg*40.0*tcfct
+c
+c BVOC advection rates
+c The advection rates of MVK+MACR and HCHO (biogenic origin)
+c are assumed to be equal (advec(k,7))
+!cxc      if(vdir.lt.215.) advec(k,7)=vg*0.5*tcfct
+!cxc      if(vdir.lt.200.) advec(k,7)=vg*1.0*tcfct
+!cxc       if((vdir.gt. 90.).and.(vdir.lt.270.)) advec(k,7)=vg*0.*tcfct
+!cxc       if((vdir.gt.135.).and.(vdir.lt.225.)) advec(k,7)=vg*1.*tcfct
+c
+c AVOC advection rates
+c The advection rates of HC3 (0.001), HC5 (1.0), OLT (0.5),
+c OLI( 0.05), KET (1.0), and HCHO (0.1) are proportional to
+c advec(k,8); the scaling factors for each are shown in ()
+c 
+!cxc      if(vdir.lt.200.) advec(k,8)=vg*2.5*tcfct
+!cxc       if((vdir.gt. 90.).and.(vdir.lt.270.)) advec(k,8)=vg*0.*tcfct
+!cxc       if((vdir.gt.135.).and.(vdir.lt.225.)) advec(k,8)=vg*0.25*tcfct
+c  
+c  
+c If RACM chemistry selected, need to add the advected mass to
+c the RACM concentrations
+c 
+       vcp(k,lno2)=vcp(k,lno2)+advec(k,1)*deltim
+       vcp(k,lno3)=vcp(k,lno3)+advec(k,3)*deltim
+       vcp(k,lo3)=vcp(k,lo3)+advec(k,4)*deltim
+       vcp(k,lmacr)=vcp(k,lmacr)+advec(k,7)*deltim
+       vcp(k,lhcho)=vcp(k,lhcho)+advec(k,7)*deltim
+!cxc       vcp(k,llim)=vcp(k,llim)+advec(k,7)*deltim
+!cxc       vcp(k,lapin)=vcp(k,lapin)+advec(k,7)*deltim
+!cxc       vcp(k,lisop)=vcp(k,lisop)+advec(k,7)*deltim
+!       vcp(k,lhc3)=vcp(k,lhc3)+0.001*advec(k,8)*deltim
+!       vcp(k,lhc5)=vcp(k,lhc5)+advec(k,8)*deltim
+!       vcp(k,lolt)=vcp(k,lolt)+0.5*advec(k,8)*deltim
+!       vcp(k,loli)=vcp(k,loli)+0.05*advec(k,8)*deltim
+!       vcp(k,lket )=vcp(k,lket )+advec(k,8)*deltim
+!       vcp(k,lhcho)=vcp(k,lhcho)+0.1*advec(k,8)*deltim
+
+      enddo  !End of level loop
+
+      return
+      end
+
+c#################################################################
+c Deposition sinks following Wesely, 1989, Gaoi et al., 1993
+c and will be modified according to Karl et al., 2010 to account
+c for faster deposition of reactive species (as observed)
+c#################################################################
+
+      subroutine sinks(vcp,akh,lprin,tstamp)
+
+      USE parameters
+      USE cacm3_parameters
+      USE cacm3_Precision, ONLY:dp 
+            
+      implicit none
+!      INTEGER             NLEV
+!      INTEGER             NSPEC,       ndspec		!ka - added deposition of meoh and etoh
+!      INTEGER             NRECT
+      INTEGER             MAXRECT
+      DOUBLE PRECISION    AKH,         TSTAMP,      VCP
+      DOUBLE PRECISION    COND,        CONDF
+!      DOUBLE PRECISION    F0,          HENRY
+      DOUBLE PRECISION    PHOT1,                    PHOTOUT
+      DOUBLE PRECISION    RA0,         RBL,         RCUT,        RCUTREF
+      DOUBLE PRECISION    RGI,         RGO,         RGS,         RMESO
+      DOUBLE PRECISION    SH1,         SHILF,                    SI
+      DOUBLE PRECISION    VP,          WIND
+      INTEGER             I,           IGAS,        J,           K
+      DOUBLE PRECISION    P,           RELH,        RHOAIR
+      DOUBLE PRECISION    T,           THETA
+      DOUBLE PRECISION    HCPY,        HTR,         SIZELF,      TLAI
+      DOUBLE PRECISION    ZROUGH
+      INTEGER             LEVCPY,      LEVHTR
+      DOUBLE PRECISION    EVAPS,       HEATS
+c      DOUBLE PRECISION    DZ,          DZF,         Z
+c      DOUBLE PRECISION    ZF
+      REAL(KIND=dp)    :: Z, ZF, DZ, DZF
+      DOUBLE PRECISION    CLAI,        CT,          DF
+      DOUBLE PRECISION    DISTLS,      FR,          TOTLAI
+      INTEGER             ITOT,        ITOTP1,      JTOT
+      DOUBLE PRECISION    DEPN,                     DEPR
+      DOUBLE PRECISION    DEPRAT,       SOURCE,     sourced	!ka - added deposition of meoh and etoh
+      DOUBLE PRECISION    DSTNET,       DSTRAD
+      DOUBLE PRECISION    FRAREA,       TEMPLF       
+      DOUBLE PRECISION    TSOIL
+      DOUBLE PRECISION    BMFLX,       D,           RNDIV
+      DOUBLE PRECISION    RNET,        RNLAM,       TSFC,        U
+      DOUBLE PRECISION    HPSI,        RHLEAF,      RSLEAF
+      DOUBLE PRECISION    RSNOVP,      RST       
+      DOUBLE PRECISION    RSTIJ 
+      DOUBLE PRECISION radn,anstom,rcut20,rsmin,trsopt,trsmin,trsmax
+      DOUBLE PRECISION rsm ,rsexp,psi1,psi2             
+      INTEGER ls                                                  
+
+!      parameter (nlev=40)    ! number of levels
+!      parameter (nspec=84, ndspec=86, nrect=249)	!ka - added deposition of meoh and etoh
+      parameter(maxrect=500)
+ 
+      logical lprin
+      dimension vcp(nlev,nspec),vp(nlev),akh(nlev)
+      common/height/z(nlev),zf(nlev),dz(nlev),dzf(nlev)
+      common/atmo1/ t(nlev),theta(nlev),p(nlev),rhoair(nlev)
+     & ,relh(nlev)
+      common /cpy/ hcpy,htr,tlai,levcpy,levhtr,zrough,sizelf
+      common/resis1/rhleaf(99),rsleaf(10,99),rsnovp(10,99),
+     & rst(10,99),hpsi
+      common/resis2/radn,anstom,rcut20,rsmin,trsopt,trsmin,trsmax,rsm
+     &,rsexp,psi1,psi2
+      common /rad2/dstrad(3,10,99),dstnet(10,99),frarea(10,99)
+     &,templf(10,99),tsoil
+      common/rad4/d(3,99),u(3,99),bmflx(3,99),rnet(99),rndiv(99),
+     &tsfc,rnlam(3,99)
+      common/misc2/fr(99),ct(99),totlai,df(99)
+     &,clai(99),distls(10),itot,itotp1,jtot
+ 
+       dimension shilf(99,nspec),sourced(99,nspec)	!ka - added deposition of meoh and etoh
+!       dimension henry(nspec),f0(nspec),dfakt(nspec)	!ka - added deposition of meoh and etoh
+ 
+      common/quellen/source(nlev,nspec),depn(nlev,nspec),
+     & deprat(nlev,nspec),depr(nspec)			!ka - added deposition of meoh and etoh
+      common/cpysrc/ evaps(99),heats(99)
+
+c####################################################################
+c Data for deposition parameters: Henry's Law coefficients (henry), 
+c reactivity relative to O3 (f0), and diffusivity factor (dfakt)
+c which is the ratio of the diffusivity of the gas to that of H20.
+c The default values are 1e.-22, 0.0 and 1.0
+c####################################################################
+c
+c     sink strength in  1/sec (like a rate constant Kd = Vd/Height)
+c
+      do k=1,nlev
+       do ls=1, nspec		!ka - added deposition of meoh and etoh
+        shilf(k,ls)=0.
+        sourced(k,ls)=0.
+        depn(k,ls)=0.
+c        deprat(k,igas)=0.	!INTERIM
+       enddo
+
+       do ls=1,nspec		!INTERIM
+        sourced(k,ls)=source(k,ls)
+        deprat(k,ls)=0.		!INTERIM
+       enddo    !INTERIM
+      enddo
+
+c -------------------------------------------
+      do j=2,jtot      ! loop regarding the layers
+       k=levhtr-2+j
+       f0(lo3)=1.0    
+c       if(relh(k).gt.0.50) 
+c    &   f0(lo3)=1.-0.9*(relh(k)-0.50)/(0.999-0.50)
+       f0(lo3)=1.-0.9*relh(k)
+       do igas=1,nspec !ka - added deposition of meoh and etoh
+         if ( dfakt(igas) .gt. 0 ) then !shc
+            rbl=rhleaf(j)/dfakt(igas) !Gao et al., 1993 (JGR 98, 18339 ...)
+         else ! avoid division by zero
+            rbl = 1.e30 
+         end if
+         rmeso=1./(henry(igas)/3000. + 100.*f0(igas)) 
+         rcut=rcut20/(henry(igas)*1.e-5 + f0(igas)) 
+         condf=0.0
+         do i=1,itotp1
+         rstij = min(3000.d0,rst(i,j))
+         cond=1./(rbl+rstij*dfakt(igas)+rmeso)+
+     &         2./(rbl+rcut)
+         condf=condf+frarea(i,j)*cond ! deposition velocity
+         enddo
+c ---------------------- ddw dry deposition modification------------
+c        for IHN
+         if(igas.eq.200.or.igas.eq.362.or.igas.eq.361.or.igas.eq.201) 
+     & condf=condf*4.0 
+c        for checking the dep velocity
+c         if(igas.eq.200) print*, 'depn-cond', rst(:, 11) 
+c ------------------------------------------------------------------
+         shilf(levhtr-2+j,igas)=condf*df(j-1)/dz(j+levhtr-3)
+        enddo  ! end species loop
+       enddo   ! end level loop
+
+c  'Source strength' per m**3
+      do k=2,nlev
+       do ls=1,nspec                    !ka - added deposition of meoh and etoh
+        si=-0.5*(shilf(k,ls)+shilf(k-1,ls))
+        depn(k,ls)=-1.0*si
+        si=si*vcp(k,ls)
+!       sourced(1,ls)= sourced(1,ls)+si  !ka - added deposition of meoh and etoh
+       sourced(k,ls)= sourced(k,ls)+si   !ddw - should be sourced(k, ls)
+       enddo      
+      enddo
+
+c Deposition to the ground follows Gao
+      rgs=500.
+      rgo=200.
+      f0(lo3)=1.0
+
+      if(relh(1).gt.0.80) then
+       rgo=200.+1800.*(relh(1)-0.80)/(0.999-0.80)
+       f0(lo3)=1.-0.9*(relh(1)-0.80)/(0.999-0.80)
+      endif
+
+       do ls=1,nspec     !ka - added deposition of meoh and etoh
+       rgi=1./(henry(ls)*1.e-5/rgs + f0(ls)/rgo)
+       ra0=z(2)/max(1.d-4,akh(1))
+       sh1=1./(ra0+rgi)
+       depn(1,ls)=sh1/dz(1)
+       si=-sh1*vcp(1,ls)/dz(1)
+       sourced(1,ls)= sourced(1,ls)+si !ka - added deposition of meoh and etoh
+      enddo
+c
+c Now transfer relevant deposition rates to an array 
+c for passing to chemistry schemes - canopy levels only
+c 
+      do k=1,levcpy+1
+       do ls=1,nspec !ka - added deposition of meoh and etoh
+        deprat(k,ls)=depn(k,ls)
+       enddo
+      enddo  
+
+!ka - added deposition of meoh and etoh
+!ka - next 5 lines map extended deposition array back to racm species
+!      sourced(:,lisop)=dble(0.0)
+!      depn(:,lisop)=0.0
+      do k=1,nlev
+       do ls=1,nspec
+          source(k,ls)=source(k,ls)-depn(k,ls)*vcp(k,ls)
+!        source(k,ls)=sourced(k,ls)
+       enddo
+      enddo   
+!ka - added deposition of meoh and etoh; end of added section    
+      return
+      end

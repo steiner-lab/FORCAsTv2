@@ -1,0 +1,39 @@
+204 2016               (jday iyear)  !22 Jul 2016
+45.559 84.714 84.714   (LAT  LONG  STD LONG)  !STD LONG is 60 plus 15 for daylight saving time - but no daylight saving applied to input file times
+0  0                    (ichem, impmpo) !chemistry mechanism switch: 0 CACM, 1 RACM-MIM+MT, MPMPO switch: 0 off, 1 on
+22.5 6.0  8.0 18.0 0.277     (hcpy,htr,levhtr,levcpy,del) !NB not all combinations work ...
+2  36.0  21.0  200.0  (isonics,zobstow,zobstcpytop,zobstcpymid,zmxd) !isonics=1 or 2, NB if only 1 sonic then use same value for zobstow and zobscpy
+ 3.80 0.08            (tlai,sizelf)  !tlai depends on jday
+0.15 0.08 0.1 0.1 0.3 0.2 0.3 0.4 1.2 0.8    (df) !  lai fractions in canopy layers: Parker, 1999: 0.10 0.02 0.05 0.03 0.03 0.05 0.09 0.12 0.18 0.33; Teske, 2001: 0.14 0.05 0.06 0.08 0.10 0.11 0.13 0.13 0.11 0.09; orig. 0.15  0.08  0.1  0.1  0.3  0.2  0.3  0.4  1.2  0.8 
+.false.                 (use strong stability in akh)
+17. 10.                (vg day,vg night)  ursp. 10
+0.4  0.4   2.0  2.0   (zrday,zrn,alphaday,alphan) orig: 0.4  0.4  2.0  2.0;baldocchi: 2.3  2.3  6.95  6.95 
+9 16  2  .2  1.0  3    (ITOT JMAX JMIN DFMIN CLUMP kmax)
+  1     0              (inrad, wpm2) read incoming solar radiation (inrad=1), input in W/m**2 (wpm2=1) or micromoles per (m2 seconds) (wpm2=0)
+0.55  0.1            (RATIO-DAY  RATIO-NITE)     Specify always, only needed for inrad=0
+0.95 0.85             (EMIS EMISOL) Org: .95 .93 
+.15 .2 .1 .20  .45  .1   .10   .3   .1               (RSOIL(3) RLEAF(3)  TLEAF(3)) orig: .2 .3 .1 .11 .37  .04  .08  .45  .0
+0.        0.         8.16 0.       0.      41.18  (AVISR,BVISR,CVISR,ANIRR,BNIRR
+0.        0.      3.22  0.       0.       57.23   (AVIST,BVIST,CVIST,ANIRT,BNIRT
+0 9 .0 .0 .0 .0 .0 .0 .0 .2 .8           (ISPHER NALPHA GR(ALPHA))orig .07 .16 .29 .30 .18 .18 .18 .18 .18
+1 1.101   1.930      (IMUNU  XMEU or angmn   XNEU or angsd     IMUNU=1 or 2)
+0  180.   15.  37.62 50  (imunua xmeuaz/angamn xneuaz/angasd beta0 nbeta)
+5.7  0.4  0.0  0.4  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0   (EFsyn) !4.73 default for isoprene - synthesis bVOC Emission Factors for iso,api,bpi,lim,omt,bcar,afar,osqt,meoh,acetald,acet,mvk-mcr,mbo,ovoc in nmol/m2/s
+0.0  0.021  0.0  0.017  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0  (EFpl) !.021 and .017 def - pool bVOC Emission Factors as above
+1.0  0.1  0.1  0.1  0.08  0.13  0.1  0.1  0.13  0.17  0.17  0.17  0.1  (beta) !temperature activity factor for pool emissions for iso,apin(=api+omt),bpin,dlim,meoh,acetald,acet,mvk-mcr,mbo,bcar,afar,osqt,oVOC; default values from Guenther et al., 2012 (GMD)
+0.05	(EFno)  !soil NO Emission Factor in nmol/m2/s
+3000. 90. 3. 100.  (RS VS LIGHT:   RCUT20 RSMIN ANSTOM RADN)       3000. 120. 3. 100. 
+30. 45. -2. 6. 5.   (RS VS TEMP:   TRSOPT TRSMAX TRSMIN RSEXP RSM) 
+-10.0 -25.0    (PSI1 PSI2)      
+1. 0.   0.5   (RASTOM D1 bkv)
+3.E6      (RROOT)
+2.4       (aroot)
+305  300  0.009	(grndT0,towT0,lapse) !Temp at ground level, tower top and adiabatic lapse rate; obs 291.25, 294.05
+-0.05 -0.1 -0.2 -0.4 -0.7 -1.0	(soil level depths)
+1.14 0.32 0.35 0.33   (RHOSOIL,SAND,SILT,CLAY) !ensure these are consistent with the soil model
+0.18  0.15  0.17  0.18  0.18  0.18          
+0.18  0.18  0.18  0.18  0.18  0.18
+0.18  0.18  0.18                             (initial soil water)
+298.0  299.0  299.0  299.0  299.0  299.8 
+299.5  295.5  294.5  294.5  294.5  294.5
+294.0  294.0  294.0                          (initial soil temperature)
